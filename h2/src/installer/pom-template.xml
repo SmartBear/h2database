@@ -1,7 +1,7 @@
 <project>
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.h2database</groupId>
-    <artifactId>h2</artifactId>
+    <artifactId>h2-secure</artifactId>
     <version>@version@</version>
     <packaging>jar</packaging>
     <name>H2 Database Engine</name>
@@ -15,8 +15,8 @@
         </license>
     </licenses>
     <scm>
-        <connection>scm:git:https://github.com/h2database/h2database</connection>
-        <url>https://github.com/h2database/h2database</url>
+        <connection>scm:git:https://github.com/AlexanderNikitin-Smartbear/h2database</connection>
+        <url>https://github.com/AlexanderNikitin-Smartbear/h2database</url>
     </scm>
     <developers>
         <developer>
