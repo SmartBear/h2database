@@ -5,6 +5,9 @@
  */
 package org.h2.build;
 
+import org.h2.build.code.SwitchSource;
+import org.h2.build.doc.XMLParser;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -22,9 +25,6 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
-
-import org.h2.build.code.SwitchSource;
-import org.h2.build.doc.XMLParser;
 
 /**
  * The build definition.
@@ -441,7 +441,7 @@ public class Build extends BuildBase {
     }
 
     private static String getJarSuffix() {
-        return "-" + getVersion() + ".jar";
+        return "-secure-" + getVersion() + ".jar";
     }
 
     /**
@@ -845,9 +845,7 @@ public class Build extends BuildBase {
 
         // generate and deploy the h2*.jar file
         jar();
-        String pom = new String(readFile(new File("src/installer/pom-template.xml")));
-        pom = replaceAll(pom, "@version@", getVersion());
-        writeFile(new File("bin/pom.xml"), pom.getBytes());
+        makePom();
         execScript("mvn", args(
                 "deploy:deploy-file",
                 "-Dfile=bin/h2" + getJarSuffix(),
@@ -904,7 +902,7 @@ public class Build extends BuildBase {
 
         // generate and deploy the h2-mvstore-*.jar file
         jarMVStore();
-        pom = new String(readFile(new File("src/installer/pom-mvstore-template.xml")));
+        String pom = new String(readFile(new File("src/installer/pom-mvstore-template.xml")));
         pom = replaceAll(pom, "@version@", getVersion());
         writeFile(new File("bin/pom.xml"), pom.getBytes());
         execScript("mvn", args(
@@ -916,6 +914,12 @@ public class Build extends BuildBase {
                 "-DpomFile=bin/pom.xml",
                 "-DartifactId=h2-mvstore",
                 "-DgroupId=com.h2database"));
+    }
+
+    private void makePom() {
+        String pom = new String(readFile(new File("src/installer/pom-template.xml")));
+        pom = replaceAll(pom, "@version@", getVersion());
+        writeFile(new File("bin/pom.xml"), pom.getBytes());
     }
 
     /**
