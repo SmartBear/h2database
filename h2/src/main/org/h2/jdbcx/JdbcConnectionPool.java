@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: Christian d'Heureuse, www.source-code.biz
  *
@@ -75,8 +75,8 @@ public class JdbcConnectionPool implements DataSource, ConnectionEventListener,
     private PrintWriter logWriter;
     private volatile int maxConnections = DEFAULT_MAX_CONNECTIONS;
     private volatile int timeout = DEFAULT_TIMEOUT;
-    private AtomicInteger activeConnections = new AtomicInteger(0);
-    private AtomicBoolean isDisposed = new AtomicBoolean(false);
+    private AtomicInteger activeConnections = new AtomicInteger();
+    private AtomicBoolean isDisposed = new AtomicBoolean();
 
     protected JdbcConnectionPool(ConnectionPoolDataSource dataSource) {
         this.dataSource = dataSource;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Locale;
 import org.h2.api.ErrorCode;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -57,6 +58,7 @@ public class TestCompatibility extends TestDb {
         testUnknownSet();
 
         conn.close();
+        testIdentifiers();
         deleteDb("compatibility");
 
         testUnknownURL();
@@ -71,7 +73,7 @@ public class TestCompatibility extends TestDb {
     }
 
     private void testCaseSensitiveIdentifiers() throws SQLException {
-        Connection c = getConnection("compatibility;DATABASE_TO_UPPER=FALSE");
+        Connection c = getConnection("compatibility;DATABASE_TO_UPPER=FALSE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
         Statement stat = c.createStatement();
         stat.execute("create table test(id int primary key, name varchar) " +
                 "as select 1, 'hello'");
@@ -110,6 +112,20 @@ public class TestCompatibility extends TestDb {
         stat.execute("select id from test t group by T.ID");
 
         stat.execute("drop table test");
+
+        rs = stat.executeQuery("select 1e10, 1000000000000000000000e10, 0xfAfBl");
+        assertTrue(rs.next());
+        assertEquals(1e10, rs.getDouble(1));
+        assertEquals(1000000000000000000000e10, rs.getDouble(2));
+        assertEquals(0xfafbL, rs.getLong(3));
+        assertFalse(rs.next());
+
+        stat.execute("create table \"t 1\" (a int, b int)");
+        stat.execute("create view v as select * from \"t 1\"");
+        stat.executeQuery("select * from v").close();
+        stat.execute("drop view v");
+        stat.execute("drop table \"t 1\"");
+
         c.close();
     }
 
@@ -119,7 +135,7 @@ public class TestCompatibility extends TestDb {
         }
         Statement stat = conn.createStatement();
         stat.execute("create table test(id int primary key) as select 1");
-        assertThrows(ErrorCode.USER_DATA_TYPE_ALREADY_EXISTS_1, stat).
+        assertThrows(ErrorCode.DOMAIN_ALREADY_EXISTS_1, stat).
                 execute("create domain int as varchar");
         conn.close();
         conn = getConnection("compatibility");
@@ -299,29 +315,28 @@ public class TestCompatibility extends TestDb {
     }
 
     private void testMySQL() throws SQLException {
+        // need to reconnect to change DATABASE_TO_LOWER
+        conn.close();
+        deleteDb("compatibility");
+        conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
         Statement stat = conn.createStatement();
-        stat.execute("set mode mysql");
         stat.execute("create schema test_schema");
         stat.execute("use test_schema");
-        assertResult("TEST_SCHEMA", stat, "select schema()");
+        assertResult("test_schema", stat, "select schema()");
         stat.execute("use public");
-        assertResult("PUBLIC", stat, "select schema()");
+        assertResult("public", stat, "select schema()");
 
         stat.execute("SELECT 1");
         stat.execute("DROP TABLE IF EXISTS TEST");
-        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, NAME VARCHAR)");
+        stat.execute("CREATE TABLE `TEST`(ID INT PRIMARY KEY, NAME VARCHAR)");
         stat.execute("INSERT INTO TEST VALUES(1, 'Hello'), (2, 'World')");
         assertResult("0", stat, "SELECT UNIX_TIMESTAMP('1970-01-01 00:00:00Z')");
-        assertResult("1196418619", stat,
-                "SELECT UNIX_TIMESTAMP('2007-11-30 10:30:19Z')");
-        assertResult("1196418619", stat,
-                "SELECT UNIX_TIMESTAMP(FROM_UNIXTIME(1196418619))");
-        assertResult("2007 November", stat,
-                "SELECT FROM_UNIXTIME(1196300000, '%Y %M')");
-        assertResult("2003-12-31", stat,
-                "SELECT DATE('2003-12-31 11:02:03')");
-        assertResult("2003-12-31", stat,
-                "SELECT DATE('2003-12-31 11:02:03')");
+        assertResult("1196418619", stat, "SELECT UNIX_TIMESTAMP('2007-11-30 10:30:19Z')");
+        assertResult("1196418619", stat, "SELECT UNIX_TIMESTAMP(FROM_UNIXTIME(1196418619))");
+        assertResult("2007 November", stat, "SELECT FROM_UNIXTIME(1196300000, '%Y %M')");
+        assertResult("2003-12-31", stat, "SELECT DATE('2003-12-31 11:02:03')");
+        assertResult("2003-12-31", stat, "SELECT DATE('2003-12-31 11:02:03')");
+        assertResult(null, stat, "SELECT DATE('100')");
         // check the weird MySQL variant of DELETE
         stat.execute("DELETE TEST FROM TEST WHERE 1=2");
 
@@ -334,6 +349,7 @@ public class TestCompatibility extends TestDb {
         ResultSet rs = stat.executeQuery("SELECT B FROM TEST2");
         assertTrue(rs.next());
         assertEquals(bytes, rs.getBytes(1));
+        assertEquals(bytes, rs.getBytes("B"));
         assertEquals(1, stat.executeUpdate("UPDATE TEST2 SET C = B"));
         testMySQLBytesCheck(stat, string, bytes);
         PreparedStatement prep = conn.prepareStatement("UPDATE TEST2 SET C = ?");
@@ -359,17 +375,17 @@ public class TestCompatibility extends TestDb {
         }
         // need to reconnect, because meta data tables may be initialized
         conn.close();
-        conn = getConnection("compatibility;MODE=MYSQL");
+        conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
         stat = conn.createStatement();
         testLog(Math.log(10), stat);
 
         DatabaseMetaData meta = conn.getMetaData();
         assertTrue(meta.storesLowerCaseIdentifiers());
-        assertTrue(meta.storesLowerCaseQuotedIdentifiers());
+        assertFalse(meta.storesLowerCaseQuotedIdentifiers());
         assertFalse(meta.storesMixedCaseIdentifiers());
         assertFalse(meta.storesMixedCaseQuotedIdentifiers());
         assertFalse(meta.storesUpperCaseIdentifiers());
-        assertTrue(meta.storesUpperCaseQuotedIdentifiers());
+        assertFalse(meta.storesUpperCaseQuotedIdentifiers());
 
         stat = conn.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,
                 ResultSet.CONCUR_UPDATABLE);
@@ -409,7 +425,7 @@ public class TestCompatibility extends TestDb {
 
         // Check if mysql comments are supported, ensure clean connection
         conn.close();
-        conn = getConnection("compatibility;MODE=MYSQL");
+        conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
         stat = conn.createStatement();
         stat.execute("DROP TABLE IF EXISTS TEST_NO_COMMENT");
         stat.execute("CREATE table TEST_NO_COMMENT " +
@@ -437,7 +453,10 @@ public class TestCompatibility extends TestDb {
         stat.execute("CREATE INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE (ATTACHMENT_ID)");
         stat.execute("DROP INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE");
 
+        stat.execute("DROP ALL OBJECTS");
+
         conn.close();
+        deleteDb("compatibility");
         conn = getConnection("compatibility");
     }
 
@@ -449,6 +468,7 @@ public class TestCompatibility extends TestDb {
         assertTrue(rs.next());
         assertEquals(string, rs.getString(1));
         assertEquals(bytes, rs.getBytes(1));
+        assertEquals(bytes, rs.getBytes("C"));
     }
 
     private void testSybaseAndMSSQLServer() throws SQLException {
@@ -668,6 +688,71 @@ public class TestCompatibility extends TestDb {
     private void testUnknownSet() throws SQLException {
         Statement stat = conn.createStatement();
         assertThrows(ErrorCode.UNKNOWN_MODE_1, stat).execute("SET MODE Unknown");
+    }
+
+    private void testIdentifiers() throws SQLException {
+        deleteDb("compatibility");
+        testIdentifiers(false, false, false);
+        testIdentifiers(false, false, true);
+        testIdentifiers(true, false, false);
+        testIdentifiers(true, false, true);
+        testIdentifiers(false, true, false);
+        testIdentifiers(false, true, true);
+    }
+
+    private void testIdentifiers(boolean upper, boolean lower, boolean caseInsensitiveIdentifiers) throws SQLException
+    {
+        try (Connection conn = getConnection("compatibility;DATABASE_TO_UPPER=" + upper + ";DATABASE_TO_LOWER=" + lower
+                + ";CASE_INSENSITIVE_IDENTIFIERS=" + caseInsensitiveIdentifiers)) {
+            Statement stat = conn.createStatement();
+            stat.execute("CREATE TABLE Test(Id INT) AS VALUES 2");
+            String schema = "PUBLIC", table = "Test", column = "Id";
+            if (upper) {
+                table = table.toUpperCase(Locale.ROOT);
+                column = column.toUpperCase(Locale.ROOT);
+            } else if (lower) {
+                schema = schema.toLowerCase(Locale.ROOT);
+                table = table.toLowerCase(Locale.ROOT);
+                column = column.toLowerCase(Locale.ROOT);
+            }
+            try (ResultSet rs = stat.executeQuery("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME"
+                    + " FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME ILIKE 'Test'")) {
+                assertTrue(rs.next());
+                assertEquals(schema, rs.getString(1));
+                assertEquals(table, rs.getString(2));
+                assertEquals(column, rs.getString(3));
+            }
+            testIdentifiers(stat, "Test", "Id", true);
+            testIdentifiers(stat, "`Test`", "`Id`", true);
+            boolean ok = upper || lower || caseInsensitiveIdentifiers;
+            testIdentifiers(stat, "TEST", "ID", ok);
+            testIdentifiers(stat, "`TEST`", "`ID`", ok);
+            testIdentifiers(stat, "test", "id", ok);
+            testIdentifiers(stat, "`test`", "`id`", ok);
+            testIdentifiers(stat, '"' + table + '"', '"' + column + '"', true);
+            testIdentifiers(stat, "\"TeSt\"", "\"iD\"", caseInsensitiveIdentifiers);
+            stat.execute("CREATE TABLE T2(\"`\" INT, `\"'\"` INT) AS VALUES (1, 2)");
+            try (ResultSet rs = stat.executeQuery("SELECT ````, \"\"\"'\"\"\" FROM T2")) {
+                assertTrue(rs.next());
+                assertEquals(1, rs.getInt(1));
+                assertEquals(2, rs.getInt(2));
+            }
+        } finally {
+            deleteDb("compatibility");
+        }
+    }
+
+    private void testIdentifiers(Statement stat, String table, String column, boolean ok) throws SQLException {
+        String query = "SELECT _ROWID_, " + column + " FROM " + table;
+        if (ok) {
+            try (ResultSet rs = stat.executeQuery(query)) {
+                assertTrue(rs.next());
+                assertEquals(1L, rs.getLong(1));
+                assertEquals(2, rs.getInt(2));
+            }
+        } else {
+            assertThrows(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, stat).executeQuery(query);
+        }
     }
 
     private void testUnknownURL() throws SQLException {

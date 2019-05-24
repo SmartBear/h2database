@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -178,7 +178,7 @@ public class TestIndex extends TestDb {
             fail();
         } catch (SQLException e) {
             String m = e.getMessage();
-            int start = m.indexOf('\"'), end = m.indexOf('\"', start + 1);
+            int start = m.indexOf('"'), end = m.lastIndexOf('"');
             String s = m.substring(start + 1, end);
             for (String t : expected) {
                 assertContains(s, t);

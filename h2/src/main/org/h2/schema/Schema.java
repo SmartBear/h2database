@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -28,7 +28,7 @@ import org.h2.index.Index;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
 import org.h2.mvstore.db.MVTableEngine;
-import org.h2.table.RegularTable;
+import org.h2.table.PageStoreTable;
 import org.h2.table.Table;
 import org.h2.table.TableLink;
 import org.h2.table.TableSynonym;
@@ -110,8 +110,10 @@ public class Schema extends DbObjectBase {
         if (system) {
             return null;
         }
-        return "CREATE SCHEMA IF NOT EXISTS " +
-            getSQL() + " AUTHORIZATION " + owner.getSQL();
+        StringBuilder builder = new StringBuilder("CREATE SCHEMA IF NOT EXISTS ");
+        getSQL(builder, true).append(" AUTHORIZATION ");
+        owner.getSQL(builder, true);
+        return builder.toString();
     }
 
     @Override
@@ -270,7 +272,7 @@ public class Schema extends DbObjectBase {
      * @param obj the object to add
      */
     public void add(SchemaObject obj) {
-        if (SysProperties.CHECK && obj.getSchema() != this) {
+        if (obj.getSchema() != this) {
             DbException.throwInternalError("wrong schema");
         }
         String name = obj.getName();
@@ -341,7 +343,6 @@ public class Schema extends DbObjectBase {
             if (synonym != null) {
                 return synonym.getSynonymFor();
             }
-            return null;
         }
         return table;
     }
@@ -704,7 +705,7 @@ public class Schema extends DbObjectBase {
                 }
                 return database.getTableEngine(data.tableEngine).createTable(data);
             }
-            return new RegularTable(data);
+            return new PageStoreTable(data);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -40,7 +40,7 @@ import org.h2.schema.Schema;
 import org.h2.store.fs.FileUtils;
 import org.h2.table.Column;
 import org.h2.table.IndexColumn;
-import org.h2.table.RegularTable;
+import org.h2.table.PageStoreTable;
 import org.h2.table.Table;
 import org.h2.table.TableType;
 import org.h2.util.Cache;
@@ -49,7 +49,6 @@ import org.h2.util.CacheObject;
 import org.h2.util.CacheWriter;
 import org.h2.util.IntArray;
 import org.h2.util.IntIntHashMap;
-import org.h2.util.StatementBuilder;
 import org.h2.util.StringUtils;
 import org.h2.value.CompareMode;
 import org.h2.value.Value;
@@ -160,7 +159,7 @@ public class PageStore implements CacheWriter {
 
     private PageLog log;
     private Schema metaSchema;
-    private RegularTable metaTable;
+    private PageStoreTable metaTable;
     private PageDataIndex metaIndex;
     private final IntIntHashMap metaRootPageId = new IntIntHashMap();
     private final HashMap<Integer, PageIndex> metaObjects = new HashMap<>();
@@ -189,7 +188,7 @@ public class PageStore implements CacheWriter {
     /**
      * The change count is something like a "micro-transaction-id".
      * It is used to ensure that changed pages are not written to the file
-     * before the the current operation is not finished. This is only a problem
+     * before the current operation is not finished. This is only a problem
      * when using a very small cache size. The value starts at 1 so that
      * pages with change count 0 can be evicted from the cache.
      */
@@ -717,8 +716,7 @@ public class PageStore implements CacheWriter {
             try {
                 p.moveTo(pageStoreSession, free);
             } finally {
-                changeCount++;
-                if (SysProperties.CHECK && changeCount < 0) {
+                if (++changeCount < 0) {
                     throw DbException.throwInternalError(
                             "changeCount has wrapped");
                 }
@@ -870,7 +868,7 @@ public class PageStore implements CacheWriter {
     private void readStaticHeader() {
         file.seek(FileStore.HEADER_LENGTH);
         Data page = Data.create(database,
-                new byte[PAGE_SIZE_MIN - FileStore.HEADER_LENGTH]);
+                new byte[PAGE_SIZE_MIN - FileStore.HEADER_LENGTH], false);
         file.readFully(page.getBytes(), 0,
                 PAGE_SIZE_MIN - FileStore.HEADER_LENGTH);
         readCount++;
@@ -942,7 +940,7 @@ public class PageStore implements CacheWriter {
     }
 
     private void writeStaticHeader() {
-        Data page = Data.create(database, new byte[pageSize - FileStore.HEADER_LENGTH]);
+        Data page = Data.create(database, new byte[pageSize - FileStore.HEADER_LENGTH], false);
         page.writeInt(pageSize);
         page.writeByte((byte) WRITE_VERSION);
         page.writeByte((byte) READ_VERSION);
@@ -1282,7 +1280,7 @@ public class PageStore implements CacheWriter {
      * @return the data page.
      */
     public Data createData() {
-        return Data.create(database, new byte[pageSize]);
+        return Data.create(database, new byte[pageSize], false);
     }
 
     /**
@@ -1604,7 +1602,7 @@ public class PageStore implements CacheWriter {
         data.persistIndexes = true;
         data.create = false;
         data.session = pageStoreSession;
-        metaTable = new RegularTable(data);
+        metaTable = new PageStoreTable(data);
         metaIndex = (PageDataIndex) metaTable.getScanIndex(
                 pageStoreSession);
         metaObjects.clear();
@@ -1670,10 +1668,8 @@ public class PageStore implements CacheWriter {
         metaRootPageId.put(id, rootPageId);
         if (type == META_TYPE_DATA_INDEX) {
             CreateTableData data = new CreateTableData();
-            if (SysProperties.CHECK) {
-                if (columns == null) {
-                    throw DbException.throwInternalError(row.toString());
-                }
+            if (columns == null) {
+                throw DbException.throwInternalError(row.toString());
             }
             for (int i = 0, len = columns.length; i < len; i++) {
                 Column col = new Column("C" + i, Value.INT);
@@ -1687,13 +1683,17 @@ public class PageStore implements CacheWriter {
             data.persistIndexes = true;
             data.create = false;
             data.session = session;
-            RegularTable table = new RegularTable(data);
+            PageStoreTable table = new PageStoreTable(data);
             boolean binaryUnsigned = SysProperties.SORT_BINARY_UNSIGNED;
             if (options.length > 3) {
                 binaryUnsigned = Boolean.parseBoolean(options[3]);
             }
+            boolean uuidUnsigned = SysProperties.SORT_UUID_UNSIGNED;
+            if (options.length > 4) {
+                uuidUnsigned = Boolean.parseBoolean(options[4]);
+            }
             CompareMode mode = CompareMode.getInstance(
-                    options[0], Integer.parseInt(options[1]), binaryUnsigned);
+                    options[0], Integer.parseInt(options[1]), binaryUnsigned, uuidUnsigned);
             table.setCompareMode(mode);
             meta = table.getScanIndex(session);
         } else {
@@ -1702,7 +1702,7 @@ public class PageStore implements CacheWriter {
                 throw DbException.get(ErrorCode.FILE_CORRUPTED_1,
                         "Table not found:" + parent + " for " + row + " meta:" + metaObjects);
             }
-            RegularTable table = (RegularTable) p.getTable();
+            PageStoreTable table = (PageStoreTable) p.getTable();
             Column[] tableCols = table.getColumns();
             int len = columns.length;
             IndexColumn[] cols = new IndexColumn[len];
@@ -1765,34 +1765,37 @@ public class PageStore implements CacheWriter {
             int type = index instanceof PageDataIndex ?
                     META_TYPE_DATA_INDEX : META_TYPE_BTREE_INDEX;
             IndexColumn[] columns = index.getIndexColumns();
-            StatementBuilder buff = new StatementBuilder();
-            for (IndexColumn col : columns) {
-                buff.appendExceptFirst(",");
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0, length = columns.length; i < length; i++) {
+                if (i > 0) {
+                    builder.append(',');
+                }
+                IndexColumn col = columns[i];
                 int id = col.column.getColumnId();
-                buff.append(id);
+                builder.append(id);
                 int sortType = col.sortType;
                 if (sortType != 0) {
-                    buff.append('/');
-                    buff.append(sortType);
+                    builder.append('/').append(sortType);
                 }
             }
-            String columnList = buff.toString();
+            String columnList = builder.toString();
             CompareMode mode = table.getCompareMode();
-            String options = mode.getName()+ "," + mode.getStrength() + ",";
+            StringBuilder options = new StringBuilder().append(mode.getName()).append(',').append(mode.getStrength())
+                    .append(',');
             if (table.isTemporary()) {
-                options += "temp";
+                options.append("temp");
             }
-            options += ",";
+            options.append(',');
             if (index instanceof PageDelegateIndex) {
-                options += "d";
+                options.append('d');
             }
-            options += "," + mode.isBinaryUnsigned();
+            options.append(',').append(mode.isBinaryUnsigned()).append(',').append(mode.isUuidUnsigned());
             Row row = metaTable.getTemplateRow();
             row.setValue(0, ValueInt.get(index.getId()));
             row.setValue(1, ValueInt.get(type));
             row.setValue(2, ValueInt.get(table.getId()));
             row.setValue(3, ValueInt.get(index.getRootPageId()));
-            row.setValue(4, ValueString.get(options));
+            row.setValue(4, ValueString.get(options.toString()));
             row.setValue(5, ValueString.get(columnList));
             row.setKey(index.getId() + 1);
             metaIndex.add(session, row);
@@ -1980,8 +1983,7 @@ public class PageStore implements CacheWriter {
      * Increment the change count. To be done after the operation has finished.
      */
     public void incrementChangeCount() {
-        changeCount++;
-        if (SysProperties.CHECK && changeCount < 0) {
+        if (++changeCount < 0) {
             throw DbException.throwInternalError("changeCount has wrapped");
         }
     }
@@ -2026,6 +2028,10 @@ public class PageStore implements CacheWriter {
 
     public synchronized void setBackup(boolean start) {
         backupLevel += start ? 1 : -1;
+    }
+
+    public synchronized void setMaxCacheMemory(int size) {
+        cache.setMaxMemory(size);
     }
 
 }

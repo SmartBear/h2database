@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -17,7 +17,7 @@ import org.h2.result.SearchRow;
 import org.h2.result.SortOrder;
 import org.h2.table.Column;
 import org.h2.table.IndexColumn;
-import org.h2.table.RegularTable;
+import org.h2.table.PageStoreTable;
 import org.h2.table.TableFilter;
 import org.h2.util.Utils;
 
@@ -30,10 +30,10 @@ import org.h2.util.Utils;
 public class ScanIndex extends BaseIndex {
     private long firstFree = -1;
     private ArrayList<Row> rows = Utils.newSmallArrayList();
-    private final RegularTable tableData;
+    private final PageStoreTable tableData;
     private long rowCount;
 
-    public ScanIndex(RegularTable table, int id, IndexColumn[] columns,
+    public ScanIndex(PageStoreTable table, int id, IndexColumn[] columns,
             IndexType indexType) {
         super(table, id, table.getName() + "_DATA", columns, indexType);
         tableData = table;
@@ -193,7 +193,7 @@ public class ScanIndex extends BaseIndex {
 
     @Override
     public String getPlanSQL() {
-        return table.getSQL() + ".tableScan";
+        return table.getSQL(new StringBuilder(), false).append(".tableScan").toString();
     }
 
 }

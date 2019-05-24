@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -18,7 +18,7 @@ import org.h2.store.Page;
 import org.h2.store.PageStore;
 import org.h2.table.Column;
 import org.h2.table.IndexColumn;
-import org.h2.table.RegularTable;
+import org.h2.table.PageStoreTable;
 import org.h2.table.TableFilter;
 import org.h2.util.MathUtils;
 import org.h2.value.Value;
@@ -32,7 +32,7 @@ import org.h2.value.ValueNull;
 public class PageDataIndex extends PageIndex {
 
     private final PageStore store;
-    private final RegularTable tableData;
+    private final PageStoreTable tableData;
     private long lastKey;
     private long rowCount;
     private int mainIndexColumn = -1;
@@ -45,7 +45,7 @@ public class PageDataIndex extends PageIndex {
     private int memoryPerPage;
     private int memoryCount;
 
-    public PageDataIndex(RegularTable table, int id, IndexColumn[] columns,
+    public PageDataIndex(PageStoreTable table, int id, IndexColumn[] columns,
             IndexType indexType, boolean create, Session session) {
         super(table, id, table.getName() + "_DATA", columns, indexType);
 
@@ -139,11 +139,13 @@ public class PageDataIndex extends PageIndex {
     }
 
     public DbException getNewDuplicateKeyException() {
-        String sql = "PRIMARY KEY ON " + table.getSQL();
+        StringBuilder builder = new StringBuilder("PRIMARY KEY ON ");
+        table.getSQL(builder, false);
         if (mainIndexColumn >= 0 && mainIndexColumn < indexColumns.length) {
-            sql +=  "(" + indexColumns[mainIndexColumn].getSQL() + ")";
+            builder.append('(');
+            indexColumns[mainIndexColumn].getSQL(builder, false).append(')');
         }
-        DbException e = DbException.get(ErrorCode.DUPLICATE_KEY_1, sql);
+        DbException e = DbException.get(ErrorCode.DUPLICATE_KEY_1, builder.toString());
         e.setSource(this);
         return e;
     }
@@ -179,7 +181,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     /**
-     * Read an overflow page page.
+     * Read an overflow page.
      *
      * @param id the page id
      * @return the page
@@ -478,7 +480,7 @@ public class PageDataIndex extends PageIndex {
 
     @Override
     public String getPlanSQL() {
-        return table.getSQL() + ".tableScan";
+        return table.getSQL(new StringBuilder(), false).append(".tableScan").toString();
     }
 
     int getMemoryPerPage() {

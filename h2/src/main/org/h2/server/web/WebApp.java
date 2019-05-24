@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -59,7 +59,6 @@ import org.h2.util.JdbcUtils;
 import org.h2.util.Profiler;
 import org.h2.util.ScriptReader;
 import org.h2.util.SortedProperties;
-import org.h2.util.StatementBuilder;
 import org.h2.util.StringUtils;
 import org.h2.util.Tool;
 import org.h2.util.Utils;
@@ -168,6 +167,14 @@ public class WebApp {
         trace(file);
         if (file.endsWith(".do")) {
             file = process(file);
+        } else if (file.endsWith(".jsp")) {
+            switch (file) {
+            case "admin.jsp":
+            case "tools.jsp":
+                if (!checkAdmin(file)) {
+                    file = process("adminLogin.do");
+                }
+            }
         }
         return file;
     }
@@ -207,44 +214,88 @@ public class WebApp {
     private String process(String file) {
         trace("process " + file);
         while (file.endsWith(".do")) {
-            if ("login.do".equals(file)) {
+            switch (file) {
+            case "login.do":
                 file = login();
-            } else if ("index.do".equals(file)) {
+                break;
+            case "index.do":
                 file = index();
-            } else if ("logout.do".equals(file)) {
+                break;
+            case "logout.do":
                 file = logout();
-            } else if ("settingRemove.do".equals(file)) {
+                break;
+            case "settingRemove.do":
                 file = settingRemove();
-            } else if ("settingSave.do".equals(file)) {
+                break;
+            case "settingSave.do":
                 file = settingSave();
-            } else if ("test.do".equals(file)) {
+                break;
+            case "test.do":
                 file = test();
-            } else if ("query.do".equals(file)) {
+                break;
+            case "query.do":
                 file = query();
-            } else if ("tables.do".equals(file)) {
+                break;
+            case "tables.do":
                 file = tables();
-            } else if ("editResult.do".equals(file)) {
+                break;
+            case "editResult.do":
                 file = editResult();
-            } else if ("getHistory.do".equals(file)) {
+                break;
+            case "getHistory.do":
                 file = getHistory();
-            } else if ("admin.do".equals(file)) {
-                file = admin();
-            } else if ("adminSave.do".equals(file)) {
-                file = adminSave();
-            } else if ("adminStartTranslate.do".equals(file)) {
-                file = adminStartTranslate();
-            } else if ("adminShutdown.do".equals(file)) {
-                file = adminShutdown();
-            } else if ("autoCompleteList.do".equals(file)) {
+                break;
+            case "admin.do":
+                file = checkAdmin(file) ? admin() : "adminLogin.do";
+                break;
+            case "adminSave.do":
+                file = checkAdmin(file) ? adminSave() : "adminLogin.do";
+                break;
+            case "adminStartTranslate.do":
+                file = checkAdmin(file) ? adminStartTranslate() : "adminLogin.do";
+                break;
+            case "adminShutdown.do":
+                file = checkAdmin(file) ? adminShutdown() : "adminLogin.do";
+                break;
+            case "autoCompleteList.do":
                 file = autoCompleteList();
-            } else if ("tools.do".equals(file)) {
-                file = tools();
-            } else {
+                break;
+            case "tools.do":
+                file = checkAdmin(file) ? tools() : "adminLogin.do";
+                break;
+            case "adminLogin.do":
+                file = adminLogin();
+                break;
+            default:
                 file = "error.jsp";
+                break;
             }
         }
         trace("return " + file);
         return file;
+    }
+
+    private boolean checkAdmin(String file) {
+        Boolean b = (Boolean) session.get("admin");
+        if (b != null && b) {
+            return true;
+        }
+        String key = server.getKey();
+        if (key != null && key.equals(session.get("key"))) {
+            return true;
+        }
+        session.put("adminBack", file);
+        return false;
+    }
+
+    private String adminLogin() {
+        String password = attributes.getProperty("password");
+        if (password == null || password.isEmpty() || !server.checkAdminPassword(password)) {
+            return "adminLogin.jsp";
+        }
+        String back = (String) session.remove("adminBack");
+        session.put("admin", true);
+        return back != null ? back : "admin.do";
     }
 
     private String autoCompleteList() {
@@ -324,12 +375,7 @@ public class WebApp {
                 if (query.endsWith("\n") || tQuery.endsWith(";")) {
                     list.add(0, "1#(Newline)#\n");
                 }
-                StatementBuilder buff = new StatementBuilder();
-                for (String s : list) {
-                    buff.appendExceptFirst("|");
-                    buff.append(s);
-                }
-                result = buff.toString();
+                result = StringUtils.join(new StringBuilder(), list, "|").toString();
             }
             session.put("autoCompleteList", result);
         } catch (Throwable e) {
@@ -358,6 +404,10 @@ public class WebApp {
             boolean ssl = Utils.parseBoolean((String) attributes.get("ssl"), false, false);
             prop.setProperty("webSSL", String.valueOf(ssl));
             server.setSSL(ssl);
+            byte[] adminPassword = server.getAdminPassword();
+            if (adminPassword != null) {
+                prop.setProperty("webAdminPassword", StringUtils.convertBytesToHex(adminPassword));
+            }
             server.saveProperties(prop);
         } catch (Exception e) {
             trace(e.toString());
@@ -890,7 +940,7 @@ public class WebApp {
             prof.startCollecting();
             Connection conn;
             try {
-                conn = server.getConnection(driver, url, user, password);
+                conn = server.getConnection(driver, url, user, password, null);
             } finally {
                 prof.stopCollecting();
                 profOpen = prof.getTop(3);
@@ -951,7 +1001,7 @@ public class WebApp {
         session.put("maxrows", "1000");
         boolean isH2 = url.startsWith("jdbc:h2:");
         try {
-            Connection conn = server.getConnection(driver, url, user, password);
+            Connection conn = server.getConnection(driver, url, user, password, (String) session.get("key"));
             session.setConnection(conn);
             session.put("url", url);
             session.put("user", user);
@@ -983,6 +1033,7 @@ public class WebApp {
         } catch (Exception e) {
             trace(e.toString());
         }
+        session.remove("admin");
         return "index.do";
     }
 
@@ -1451,7 +1502,7 @@ public class WebApp {
                 String s = sql;
                 for (Integer type : params) {
                     idx = s.indexOf('?');
-                    if (type.intValue() == 1) {
+                    if (type == 1) {
                         s = s.substring(0, idx) + random.nextInt(count) + s.substring(idx + 1);
                     } else {
                         s = s.substring(0, idx) + i + s.substring(idx + 1);
@@ -1471,7 +1522,7 @@ public class WebApp {
             for (int i = 0; !stop && i < count; i++) {
                 for (int j = 0; j < params.size(); j++) {
                     Integer type = params.get(j);
-                    if (type.intValue() == 1) {
+                    if (type == 1) {
                         prep.setInt(j + 1, random.nextInt(count));
                     } else {
                         prep.setInt(j + 1, i);
@@ -1492,19 +1543,15 @@ public class WebApp {
             }
         }
         time = System.currentTimeMillis() - time;
-        StatementBuilder buff = new StatementBuilder();
-        buff.append(time).append(" ms: ").append(count).append(" * ");
-        if (prepared) {
-            buff.append("(Prepared) ");
-        } else {
-            buff.append("(Statement) ");
+        StringBuilder builder = new StringBuilder().append(time).append(" ms: ").append(count).append(" * ")
+                .append(prepared ? "(Prepared) " : "(Statement) ").append('(');
+        for (int i = 0, size = params.size(); i < size; i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            builder.append(params.get(i) == 0 ? "i" : "rnd");
         }
-        buff.append('(');
-        for (int p : params) {
-            buff.appendExceptFirst(", ");
-            buff.append(p == 0 ? "i" : "rnd");
-        }
-        return buff.append(") ").append(sql).toString();
+        return builder.append(") ").append(sql).toString();
     }
 
     private String getCommandHistoryString() {
