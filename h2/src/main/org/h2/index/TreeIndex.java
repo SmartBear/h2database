@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,13 +7,12 @@ package org.h2.index;
 
 import org.h2.command.dml.AllColumnsForPlan;
 import org.h2.engine.Session;
-import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
 import org.h2.result.Row;
 import org.h2.result.SearchRow;
 import org.h2.result.SortOrder;
 import org.h2.table.IndexColumn;
-import org.h2.table.RegularTable;
+import org.h2.table.PageStoreTable;
 import org.h2.table.TableFilter;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
@@ -24,11 +23,11 @@ import org.h2.value.ValueNull;
 public class TreeIndex extends BaseIndex {
 
     private TreeNode root;
-    private final RegularTable tableData;
+    private final PageStoreTable tableData;
     private long rowCount;
     private boolean closed;
 
-    public TreeIndex(RegularTable table, int id, String indexName,
+    public TreeIndex(PageStoreTable table, int id, String indexName,
             IndexColumn[] columns, IndexType indexType) {
         super(table, id, indexName, columns, indexType);
         tableData = table;
@@ -205,7 +204,7 @@ public class TreeIndex extends BaseIndex {
                 x.left = d.left;
             }
 
-            if (SysProperties.CHECK && x.right == null) {
+            if (x.right == null) {
                 DbException.throwInternalError("tree corrupted");
             }
             x.right.parent = x;

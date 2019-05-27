@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -19,7 +19,7 @@ import org.h2.message.DbException;
 import org.h2.message.TraceObject;
 import org.h2.result.ResultInterface;
 import org.h2.result.ResultWithGeneratedKeys;
-import org.h2.tools.SimpleResultSet;
+import org.h2.result.SimpleResult;
 import org.h2.util.ParserUtil;
 import org.h2.util.StringUtils;
 import org.h2.util.Utils;
@@ -866,21 +866,20 @@ public class JdbcStatement extends TraceObject implements Statement, JdbcStateme
     @Override
     public ResultSet getGeneratedKeys() throws SQLException {
         try {
-            int id = getNextId(TraceObject.RESULT_SET);
+            int id = generatedKeys != null ? generatedKeys.getTraceId() : getNextId(TraceObject.RESULT_SET);
             if (isDebugEnabled()) {
                 debugCodeAssign("ResultSet", TraceObject.RESULT_SET, id, "getGeneratedKeys()");
             }
             checkClosed();
-            if (!conn.scopeGeneratedKeys()) {
-                if (generatedKeys != null) {
-                    return generatedKeys;
-                }
-                if (session.isSupportsGeneratedKeys()) {
-                    return new SimpleResultSet();
+            if (generatedKeys == null) {
+                if (!conn.scopeGeneratedKeys() && session.isSupportsGeneratedKeys()) {
+                    generatedKeys = new JdbcResultSet(conn, this, null, new SimpleResult(), id, false, true, false);
+                } else {
+                    // Compatibility mode or an old server, so use SCOPE_IDENTITY()
+                    generatedKeys = conn.getGeneratedKeys(this, id);
                 }
             }
-            // Compatibility mode or an old server, so use SCOPE_IDENTITY()
-            return conn.getGeneratedKeys(this, id);
+            return generatedKeys;
         } catch (Exception e) {
             throw logAndConvert(e);
         }
@@ -1384,17 +1383,35 @@ public class JdbcStatement extends TraceObject implements Statement, JdbcStateme
 
     /**
      * @param identifier
-     *            identifier to quote if required
+     *            identifier to quote if required, may be quoted or unquoted
      * @param alwaysQuote
      *            if {@code true} identifier will be quoted unconditionally
-     * @return specified identifier quoted if required or explicitly requested
+     * @return specified identifier quoted if required, explicitly requested, or
+     *         if it was already quoted
+     * @throws SQLException
+     *             if identifier is not a valid identifier
      */
     @Override
     public String enquoteIdentifier(String identifier, boolean alwaysQuote) throws SQLException {
-        if (alwaysQuote || !isSimpleIdentifier(identifier)) {
-            return StringUtils.quoteIdentifier(identifier);
+        if (isSimpleIdentifier(identifier)) {
+            return alwaysQuote ? '"' + identifier + '"': identifier;
         }
-        return identifier;
+        int length = identifier.length();
+        if (length > 0 && identifier.charAt(0) == '"') {
+            boolean quoted = true;
+            for (int i = 1; i < length; i++) {
+                if (identifier.charAt(i) == '"') {
+                    quoted = !quoted;
+                } else if (!quoted) {
+                    throw new SQLException();
+                }
+            }
+            if (quoted) {
+                throw new SQLException();
+            }
+            return identifier;
+        }
+        return StringUtils.quoteIdentifier(identifier);
     }
 
     /**
@@ -1404,7 +1421,8 @@ public class JdbcStatement extends TraceObject implements Statement, JdbcStateme
      */
     @Override
     public boolean isSimpleIdentifier(String identifier) throws SQLException {
-        return ParserUtil.isSimpleIdentifier(identifier);
+        JdbcConnection.Settings settings = conn.getSettings();
+        return ParserUtil.isSimpleIdentifier(identifier, settings.databaseToUpper, settings.databaseToLower);
     }
 
     /**

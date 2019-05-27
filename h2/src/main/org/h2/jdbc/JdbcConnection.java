@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0, and the
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0, and the
  * EPL 1.0 (http://h2database.com/html/license.html). Initial Developer: H2
  * Group
  */
@@ -53,6 +53,7 @@ import org.h2.value.Value;
 import org.h2.value.ValueBytes;
 import org.h2.value.ValueInt;
 import org.h2.value.ValueNull;
+import org.h2.value.ValueResultSet;
 import org.h2.value.ValueString;
 
 /**
@@ -65,8 +66,53 @@ import org.h2.value.ValueString;
  * used in one thread at any time.
  * </p>
  */
-public class JdbcConnection extends TraceObject
-        implements Connection, JdbcConnectionBackwardsCompat {
+public class JdbcConnection extends TraceObject implements Connection, JdbcConnectionBackwardsCompat {
+
+    /**
+     * Database settings.
+     */
+    public static final class Settings {
+
+        /**
+         * The database mode.
+         */
+        public final Mode mode;
+
+        /**
+         * Whether unquoted identifiers are converted to upper case.
+         */
+        public final boolean databaseToUpper;
+
+        /**
+         * Whether unquoted identifiers are converted to lower case.
+         */
+        public final boolean databaseToLower;
+
+        /**
+         * Whether all identifiers are case insensitive.
+         */
+        public final boolean caseInsensitiveIdentifiers;
+
+        /**
+         * Creates new instance of database settings.
+         *
+         * @param mode
+         *            the database mode
+         * @param databaseToUpper
+         *            whether unquoted identifiers are converted to upper case
+         * @param databaseToLower
+         *            whether unquoted identifiers are converted to lower case
+         * @param caseInsensitiveIdentifiers
+         *            whether all identifiers are case insensitive
+         */
+        Settings(Mode mode, boolean databaseToUpper, boolean databaseToLower, boolean caseInsensitiveIdentifiers) {
+            this.mode = mode;
+            this.databaseToUpper = databaseToUpper;
+            this.databaseToLower = databaseToLower;
+            this.caseInsensitiveIdentifiers = caseInsensitiveIdentifiers;
+        }
+
+    }
 
     private static final String NUM_SERVERS = "numServers";
     private static final String PREFIX_SERVER = "server";
@@ -92,7 +138,7 @@ public class JdbcConnection extends TraceObject
     private int queryTimeoutCache = -1;
 
     private Map<String, String> clientInfo;
-    private volatile Mode mode;
+    private volatile Settings settings;
     private final boolean scopeGeneratedKeys;
 
     /**
@@ -1591,7 +1637,7 @@ public class JdbcConnection extends TraceObject
     /**
      * INTERNAL
      */
-    ResultSet getGeneratedKeys(JdbcStatement stat, int id) {
+    JdbcResultSet getGeneratedKeys(JdbcStatement stat, int id) {
         getGeneratedKeys = prepareCommand(
                 "SELECT SCOPE_IDENTITY() "
                         + "WHERE SCOPE_IDENTITY() IS NOT NULL",
@@ -2046,7 +2092,7 @@ public class JdbcConnection extends TraceObject
      * @return the object
      */
     Object convertToDefaultObject(Value v) {
-        switch (v.getType()) {
+        switch (v.getValueType()) {
         case Value.CLOB: {
             int id = getNextId(TraceObject.CLOB);
             return new JdbcClob(this, v, JdbcLob.State.WITH_VALUE, id);
@@ -2061,6 +2107,10 @@ public class JdbcConnection extends TraceObject
                         session.getDataHandler());
             }
             break;
+        case Value.RESULT_SET: {
+            int id = getNextId(TraceObject.RESULT_SET);
+            return new JdbcResultSet(this, null, null, ((ValueResultSet) v).getResult(), id, false, true, false);
+        }
         case Value.BYTE:
         case Value.SHORT:
             if (!SysProperties.OLD_RESULT_SET_GET_OBJECT) {
@@ -2083,31 +2133,61 @@ public class JdbcConnection extends TraceObject
     }
 
     Mode getMode() throws SQLException {
-        Mode mode = this.mode;
-        if (mode == null) {
-            String name;
+        return getSettings().mode;
+    }
+
+    /**
+     * INTERNAL
+     */
+    public Settings getSettings() throws SQLException {
+        Settings settings = this.settings;
+        if (settings == null) {
+            String modeName = ModeEnum.REGULAR.name();
+            boolean databaseToUpper = true, databaseToLower = false, caseInsensitiveIdentifiers = false;
             try (PreparedStatement prep = prepareStatement(
-                    "SELECT VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME=?")) {
+                    "SELECT NAME, VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME IN (?, ?, ?, ?)")) {
                 prep.setString(1, "MODE");
+                prep.setString(2, "DATABASE_TO_UPPER");
+                prep.setString(3, "DATABASE_TO_LOWER");
+                prep.setString(4, "CASE_INSENSITIVE_IDENTIFIERS");
                 ResultSet rs = prep.executeQuery();
-                rs.next();
-                name = rs.getString(1);
+                while (rs.next()) {
+                    String value = rs.getString(2);
+                    switch (rs.getString(1)) {
+                    case "MODE":
+                        modeName = value;
+                        break;
+                    case "DATABASE_TO_UPPER":
+                        databaseToUpper = Boolean.valueOf(value);
+                        break;
+                    case "DATABASE_TO_LOWER":
+                        databaseToLower = Boolean.valueOf(value);
+                        break;
+                    case "CASE_INSENSITIVE_IDENTIFIERS":
+                        caseInsensitiveIdentifiers = Boolean.valueOf(value);
+                    }
+                }
             }
-            mode = Mode.getInstance(name);
+            Mode mode = Mode.getInstance(modeName);
             if (mode == null) {
                 mode = Mode.getRegular();
             }
-            this.mode = mode;
+            if (session instanceof SessionRemote
+                    && ((SessionRemote) session).getClientVersion() < Constants.TCP_PROTOCOL_VERSION_18) {
+                caseInsensitiveIdentifiers = !databaseToUpper;
+            }
+            settings = new Settings(mode, databaseToUpper, databaseToLower, caseInsensitiveIdentifiers);
+            this.settings = settings;
         }
-        return mode;
+        return settings;
     }
 
     /**
      * INTERNAL
      */
     public boolean isRegularMode() throws SQLException {
-        // Clear cached mode if any (required by tests)
-        mode = null;
+        // Clear cached settings if any (required by tests)
+        settings = null;
         return getMode().getEnum() == ModeEnum.REGULAR;
     }
 }

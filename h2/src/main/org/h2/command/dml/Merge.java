@@ -1,12 +1,11 @@
 /*
- * Copyright 2004-2018 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command.dml;
 
 import java.util.ArrayList;
-
 import org.h2.api.ErrorCode;
 import org.h2.api.Trigger;
 import org.h2.command.Command;
@@ -21,26 +20,24 @@ import org.h2.expression.Expression;
 import org.h2.expression.Parameter;
 import org.h2.index.Index;
 import org.h2.message.DbException;
+import org.h2.mvstore.db.MVPrimaryIndex;
 import org.h2.result.ResultInterface;
 import org.h2.result.Row;
 import org.h2.table.Column;
 import org.h2.table.Table;
 import org.h2.table.TableFilter;
-import org.h2.util.StatementBuilder;
-import org.h2.util.Utils;
 import org.h2.value.Value;
 
 /**
  * This class represents the statement
  * MERGE
  */
-public class Merge extends Prepared {
+public class Merge extends CommandWithValues {
 
     private Table targetTable;
     private TableFilter targetTableFilter;
     private Column[] columns;
     private Column[] keys;
-    private final ArrayList<Expression[]> valuesExpressionList = Utils.newSmallArrayList();
     private Query query;
     private Prepared update;
 
@@ -70,15 +67,6 @@ public class Merge extends Prepared {
 
     public void setQuery(Query query) {
         this.query = query;
-    }
-
-    /**
-     * Add a row to this merge statement.
-     *
-     * @param expr the list of values
-     */
-    public void addRow(Expression[] expr) {
-        valuesExpressionList.add(expr);
     }
 
     @Override
@@ -111,7 +99,7 @@ public class Merge extends Prepared {
                                 generatedKeys.add(c);
                             }
                         } catch (DbException ex) {
-                            throw setRow(ex, count, getSQL(expr));
+                            throw setRow(ex, count, getSimpleSQL(expr));
                         }
                     }
                 }
@@ -166,7 +154,7 @@ public class Merge extends Prepared {
             Column col = keys[i];
             Value v = row.getValue(col.getColumnId());
             if (v == null) {
-                throw DbException.get(ErrorCode.COLUMN_CONTAINS_NULL_VALUES_1, col.getSQL());
+                throw DbException.get(ErrorCode.COLUMN_CONTAINS_NULL_VALUES_1, col.getSQL(false));
             }
             Parameter p = k.get(columns.length + i);
             p.setValue(v);
@@ -193,15 +181,25 @@ public class Merge extends Prepared {
                     Index index = (Index) e.getSource();
                     if (index != null) {
                         // verify the index columns match the key
-                        Column[] indexColumns = index.getColumns();
-                        boolean indexMatchesKeys = true;
+                        Column[] indexColumns;
+                        if (index instanceof MVPrimaryIndex) {
+                            MVPrimaryIndex foundMV = (MVPrimaryIndex) index;
+                            indexColumns = new Column[] {
+                                    foundMV.getIndexColumns()[foundMV.getMainIndexColumn()].column };
+                        } else {
+                            indexColumns = index.getColumns();
+                        }
+                        boolean indexMatchesKeys;
                         if (indexColumns.length <= keys.length) {
+                            indexMatchesKeys = true;
                             for (int i = 0; i < indexColumns.length; i++) {
                                 if (indexColumns[i] != keys[i]) {
                                     indexMatchesKeys = false;
                                     break;
                                 }
                             }
+                        } else {
+                            indexMatchesKeys = false;
                         }
                         if (indexMatchesKeys) {
                             throw DbException.get(ErrorCode.CONCURRENT_UPDATE_1, targetTable.getName());
@@ -211,52 +209,37 @@ public class Merge extends Prepared {
                 throw e;
             }
         } else if (count != 1) {
-            throw DbException.get(ErrorCode.DUPLICATE_KEY_1, targetTable.getSQL());
+            throw DbException.get(ErrorCode.DUPLICATE_KEY_1, targetTable.getSQL(false));
         }
     }
 
     @Override
-    public String getPlanSQL() {
-        StatementBuilder buff = new StatementBuilder("MERGE INTO ");
-        buff.append(targetTable.getSQL()).append('(');
-        for (Column c : columns) {
-            buff.appendExceptFirst(", ");
-            buff.append(c.getSQL());
-        }
-        buff.append(')');
+    public String getPlanSQL(boolean alwaysQuote) {
+        StringBuilder builder = new StringBuilder("MERGE INTO ");
+        targetTable.getSQL(builder, alwaysQuote).append('(');
+        Column.writeColumns(builder, columns, alwaysQuote);
+        builder.append(')');
         if (keys != null) {
-            buff.append(" KEY(");
-            buff.resetCount();
-            for (Column c : keys) {
-                buff.appendExceptFirst(", ");
-                buff.append(c.getSQL());
-            }
-            buff.append(')');
+            builder.append(" KEY(");
+            Column.writeColumns(builder, keys, alwaysQuote);
+            builder.append(')');
         }
-        buff.append('\n');
+        builder.append('\n');
         if (!valuesExpressionList.isEmpty()) {
-            buff.append("VALUES ");
+            builder.append("VALUES ");
             int row = 0;
             for (Expression[] expr : valuesExpressionList) {
                 if (row++ > 0) {
-                    buff.append(", ");
+                    builder.append(", ");
                 }
-                buff.append('(');
-                buff.resetCount();
-                for (Expression e : expr) {
-                    buff.appendExceptFirst(", ");
-                    if (e == null) {
-                        buff.append("DEFAULT");
-                    } else {
-                        buff.append(e.getSQL());
-                    }
-                }
-                buff.append(')');
+                builder.append('(');
+                Expression.writeExpressions(builder, expr, alwaysQuote);
+                builder.append(')');
             }
         } else {
-            buff.append(query.getPlanSQL());
+            builder.append(query.getPlanSQL(alwaysQuote));
         }
-        return buff.toString();
+        return builder.toString();
     }
 
     @Override
@@ -294,20 +277,11 @@ public class Merge extends Prepared {
             }
             keys = idx.getColumns();
         }
-        StatementBuilder buff = new StatementBuilder("UPDATE ");
-        buff.append(targetTable.getSQL()).append(" SET ");
-        for (Column c : columns) {
-            buff.appendExceptFirst(", ");
-            buff.append(c.getSQL()).append("=?");
-        }
-        buff.append(" WHERE ");
-        buff.resetCount();
-        for (Column c : keys) {
-            buff.appendExceptFirst(" AND ");
-            buff.append(c.getSQL()).append("=?");
-        }
-        String sql = buff.toString();
-        update = session.prepare(sql);
+        StringBuilder builder = new StringBuilder("UPDATE ");
+        targetTable.getSQL(builder, true).append(" SET ");
+        Column.writeColumns(builder, columns, ", ", "=?", true).append(" WHERE ");
+        Column.writeColumns(builder, keys, " AND ", "=?", true);
+        update = session.prepare(builder.toString());
     }
 
     @Override
