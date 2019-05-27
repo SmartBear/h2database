@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.h2database</groupId>
-  <artifactId>h2</artifactId>
+  <artifactId>h2-secure</artifactId>
   <version>1.4.199.1</version>
   <packaging>jar</packaging>
   <name>H2 Database Engine</name>
